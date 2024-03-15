@@ -28,6 +28,7 @@ const initializeDBServer = async () => {
 
 initializeDBServer()
 
+//API 1
 app.post('/register/', async (request, response) => {
   const {username, password, name, gender} = request.body
   const checkUsernamePresentQuery = `
@@ -47,6 +48,7 @@ app.post('/register/', async (request, response) => {
       const registerUserQuery = `
         INSERT INTO user (username, password, name, gender)
         VALUES (?, ?, ?, ?);`
+
       await db.run(registerUserQuery, [username, hashedPassword, name, gender])
       response.status(200)
       response.send('User created successfully')
@@ -58,58 +60,65 @@ app.post('/register/', async (request, response) => {
   }
 })
 
-// middelware for jwt token
+// Middleware for jwt token
 const authenticatejwt = (request, response, next) => {
-  const token = request.headers.authorization
-  if (!token) {
-    return response.status(401).json({message: 'Invalid JWT Token'})
+  const authHeaders = request.headers['authorization']
+
+  if (!authHeaders || !authHeaders.startsWith('Bearer ')) {
+    response.status(401).send('Invalid Access Token')
+    return
   }
-  jwt.verify(token.split(' ')[1], 'MY_SECRET_KEY', (err, decoded) => {
-    if (err) {
-      return response.status(401).json({message: 'Invalid JWT Token'})
+
+  const token = authHeaders.split(' ')[1]
+
+  jwt.verify(token, 'MY_SECRET_KEY', (error, decoded) => {
+    if (error) {
+      response.status(401).send('Invalid Access Token')
+    } else {
+      console.log(decoded)
+      request.user = decoded
+      next()
     }
-    request.user = decoded
-    next()
   })
 }
 
+// API 2
+// API 2
 app.post('/login/', async (request, response) => {
   const {username, password} = request.body
-  const checkUserPresentOrNot = `SELECT * FROM user WHERE username = ?`
+  const checkUserPresentOrNot = `SELECT * FROM user WHERE username = ?;`
+
   try {
-    const dataBaseUser = await db.get(checkUserPresentOrNot, [username])
-    if (dataBaseUser === undefined) {
-      response.status(400).send('Invalid user')
+    const dbUser = await db.get(checkUserPresentOrNot, [username])
+
+    if (dbUser === undefined) {
+      response.status(400)
+      response.send('Invalid user')
     } else {
-      const isPassMatch = await bcrypt.compare(password, dataBaseUser.password)
-      if (isPassMatch) {
+      const isPassMatched = await bcrypt.compare(password, dbUser.password)
+      if (isPassMatched === true) {
         const payload = {username: username}
         const jwtToken = jwt.sign(payload, 'MY_SECRET_KEY')
-        response.send(jwtToken)
+        response.send({jwtToken})
       } else {
-        response.status(400).send('Invalid password')
+        response.status(400)
+        response.send('Invalid password')
       }
     }
   } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
+    console.log(`Error: ${error.message}`)
+    response.status(500)
+    response.send('Internal Server Error')
   }
 })
 
-// Protected route example
-app.get('/protected', authenticatejwt, (request, response) => {
-  response.send('You are authorized')
-})
-
+// API 3
 app.get('/user/tweets/feed/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
 
   try {
-    // Retrieve user_id of the current user
     const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
     const {user_id} = await db.get(getUserIdQuery, [currentUser])
-
-    // Retrieve tweets from users whom the current user follows
     const tweetFeedQuery = `
       SELECT u.username, t.tweet, t.date_time AS dateTime
       FROM tweet AS t
@@ -120,7 +129,7 @@ app.get('/user/tweets/feed/', authenticatejwt, async (request, response) => {
       LIMIT 4`
 
     const tweets = await db.all(tweetFeedQuery, [user_id])
-    response.json(tweets)
+    response.send(tweets)
   } catch (error) {
     console.log(`DB Error: ${error.message}`)
     response.status(500).send('Internal Server Error')
@@ -132,11 +141,8 @@ app.get('/user/following/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
 
   try {
-    // Retrieve user_id of the current user
     const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
     const {user_id} = await db.get(getUserIdQuery, [currentUser])
-
-    // Retrieve names of people whom the current user follows
     const listOfFollowingQuery = `
       SELECT u.name
       FROM user AS u
@@ -226,11 +232,9 @@ app.get(
     const tweetId = request.params.tweetId
 
     try {
-      // Retrieve user_id of the current user
       const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
       const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-      // Check if the tweet belongs to the user or the user is following the tweet owner
       const checkTweetOwnershipQuery = `
       SELECT t.tweet_id 
       FROM tweet AS t
@@ -275,11 +279,9 @@ app.get(
     const tweetId = request.params.tweetId
 
     try {
-      // Retrieve user_id of the current user
       const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
       const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-      // Check if the tweet belongs to the user or the user is following the tweet owner
       const checkTweetOwnershipQuery = `
       SELECT t.tweet_id 
       FROM tweet AS t
@@ -295,7 +297,6 @@ app.get(
       if (!tweet) {
         response.status(401).send('Invalid Request')
       } else {
-        // Retrieve the list of replies
         const repliesQuery = `
         SELECT u.name, r.reply
         FROM reply AS r
@@ -319,11 +320,9 @@ app.get('/user/tweets/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
 
   try {
-    // Retrieve user_id of the current user
     const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
     const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-    // Retrieve all tweets of the user along with likes count, replies count, and date-time
     const userTweetsQuery = `
       SELECT t.tweet, 
              COUNT(l.like_id) AS likes, 
@@ -351,11 +350,8 @@ app.post('/user/tweets/', authenticatejwt, async (request, response) => {
   const {tweet} = request.body
 
   try {
-    // Retrieve user_id of the current user
     const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
     const {user_id} = await db.get(getUserIdQuery, [currentUser])
-
-    // Insert the new tweet into the tweet table
     const createTweetQuery = `
       INSERT INTO tweet (tweet, user_id, date_time)
       VALUES (?, ?, datetime('now'))
@@ -370,16 +366,15 @@ app.post('/user/tweets/', authenticatejwt, async (request, response) => {
 })
 
 //API 11
+// API 11
 app.delete('/tweets/:tweetId/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
   const tweetId = request.params.tweetId
 
   try {
-    // Retrieve user_id of the current user
     const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
     const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-    // Check if the tweet belongs to the user
     const checkTweetOwnershipQuery = `SELECT user_id FROM tweet WHERE tweet_id = ?`
     const {user_id: tweetOwnerId} = await db.get(checkTweetOwnershipQuery, [
       tweetId,
@@ -388,7 +383,6 @@ app.delete('/tweets/:tweetId/', authenticatejwt, async (request, response) => {
     if (!tweetOwnerId || user_id !== tweetOwnerId) {
       response.status(401).send('Invalid Request')
     } else {
-      // Delete the tweet
       const deleteTweetQuery = `DELETE FROM tweet WHERE tweet_id = ?`
       await db.run(deleteTweetQuery, [tweetId])
 
