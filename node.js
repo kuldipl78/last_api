@@ -65,7 +65,7 @@ const authenticatejwt = (request, response, next) => {
   const authHeaders = request.headers['authorization']
 
   if (!authHeaders || !authHeaders.startsWith('Bearer ')) {
-    response.status(401).send('Invalid Access Token')
+    response.status(401).send('Invalid JWT Token')
     return
   }
 
@@ -73,7 +73,7 @@ const authenticatejwt = (request, response, next) => {
 
   jwt.verify(token, 'MY_SECRET_KEY', (error, decoded) => {
     if (error) {
-      response.status(401).send('Invalid Access Token')
+      response.status(401).send('Invalid JWT Token')
     } else {
       console.log(decoded)
       request.user = decoded
@@ -115,94 +115,73 @@ app.post('/login/', async (request, response) => {
 // API 3
 app.get('/user/tweets/feed/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
-
-  try {
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
-    const tweetFeedQuery = `
-      SELECT u.username, t.tweet, t.date_time AS dateTime
-      FROM tweet AS t
-      INNER JOIN follower AS f ON t.user_id = f.following_user_id
-      INNER JOIN user AS u ON t.user_id = u.user_id
-      WHERE f.follower_user_id = ?
-      ORDER BY t.date_time DESC
-      LIMIT 4`
-
-    const tweets = await db.all(tweetFeedQuery, [user_id])
-    response.send(tweets)
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
-  }
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const queryToGetLatestTweet = `SELECT u.username, t.tweet, t.date_time AS dateTime
+                  FROM tweet AS t
+                  INNER JOIN user AS u ON t.user_id = u.user_id
+                  WHERE t.user_id IN (
+                      SELECT following_user_id
+                      FROM follower
+                      WHERE follower_user_id = ?
+                  )
+                  ORDER BY t.date_time DESC
+                  LIMIT 4;`
+  const dbResponse = await db.all(queryToGetLatestTweet, [user_id])
+  response.send(dbResponse)
 })
 
-// API 4
+//API 4
 app.get('/user/following/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
-
-  try {
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
-    const listOfFollowingQuery = `
-      SELECT u.name
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const followingQuery = `SELECT u.name
       FROM user AS u
       INNER JOIN follower AS f ON u.user_id = f.following_user_id
       WHERE f.follower_user_id = ?`
-
-    const followingList = await db.all(listOfFollowingQuery, [user_id])
-    response.json(followingList)
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
-  }
+  const dbResponse = await db.all(followingQuery, [user_id])
+  response.send(dbResponse)
 })
 
-//API 5
+// API 5
 app.get('/user/followers/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
-  try {
-    const userQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(userQuery, [currentUser])
-    const listOfFollwPeople = `SELECT u.name 
-                          FROM user AS u 
-                          INNER JOIN follower AS f ON u.user_id = f.follower_id
-                          WHERE f.following_user_id = ?`
-    const dbResponse = await db.all(listOfFollwPeople, [user_id])
-    response.json(dbResponse)
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
-  }
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const followersQuery = `SELECT u.name
+                    FROM user AS u
+                    INNER JOIN follower AS f ON u.user_id = f.follower_user_id
+                    WHERE f.following_user_id = ?;
+                    `
+  const dbResponse = await db.all(followersQuery, [user_id])
+  response.send(dbResponse)
 })
 
-//API 6
+// API 6
 app.get('/tweets/:tweetId/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
   const tweetId = request.params.tweetId
 
-  try {
-    // Retrieve user_id of the current user
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-    // Check if the tweet belongs to the user or the user is following the tweet owner
-    const checkTweetOwnershipQuery = `
+  const checkTweetOwnershipQuery = `
       SELECT t.tweet_id 
       FROM tweet AS t
       LEFT JOIN follower AS f ON t.user_id = f.following_user_id
       WHERE (t.user_id = ? OR f.follower_user_id = ?) AND t.tweet_id = ?
     `
-    const tweet = await db.get(checkTweetOwnershipQuery, [
-      user_id,
-      user_id,
-      tweetId,
-    ])
+  const tweet = await db.get(checkTweetOwnershipQuery, [
+    user_id,
+    user_id,
+    tweetId,
+  ])
 
-    if (!tweet) {
-      response.status(401).send('Invalid Request')
-    } else {
-      // Retrieve tweet details: tweet, likes count, replies count, and date-time
-      const tweetDetailsQuery = `
+  if (!tweet) {
+    response.status(401).send('Invalid Request')
+  } else {
+    const tweetDetailsQuery = `
         SELECT t.tweet, 
                COUNT(l.like_id) AS likes, 
                COUNT(r.reply_id) AS replies, 
@@ -213,17 +192,13 @@ app.get('/tweets/:tweetId/', authenticatejwt, async (request, response) => {
         WHERE t.tweet_id = ?
         GROUP BY t.tweet_id
       `
-      const tweetDetails = await db.get(tweetDetailsQuery, [tweetId])
+    const tweetDetails = await db.get(tweetDetailsQuery, [tweetId])
 
-      response.json(tweetDetails)
-    }
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
+    response.json(tweetDetails)
   }
 })
 
-// API7
+// API 7
 app.get(
   '/tweets/:tweetId/likes/',
   authenticatejwt,
@@ -231,41 +206,33 @@ app.get(
     const currentUser = request.user.username
     const tweetId = request.params.tweetId
 
-    try {
-      const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-      const {user_id} = await db.get(getUserIdQuery, [currentUser])
+    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+    const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-      const checkTweetOwnershipQuery = `
-      SELECT t.tweet_id 
-      FROM tweet AS t
-      LEFT JOIN follower AS f ON t.user_id = f.following_user_id
-      WHERE (t.user_id = ? OR f.follower_user_id = ?) AND t.tweet_id = ?
-    `
-      const tweet = await db.get(checkTweetOwnershipQuery, [
-        user_id,
-        user_id,
-        tweetId,
-      ])
-
-      if (!tweet) {
-        response.status(401).send('Invalid Request')
-      } else {
-        // Retrieve the list of usernames who liked the tweet
-        const likedUsersQuery = `
-        SELECT u.username
-        FROM user AS u
-        INNER JOIN like AS l ON u.user_id = l.user_id
-        WHERE l.tweet_id = ?
+    const checkTweetOwnershipQuery = `
+        SELECT t.tweet_id 
+        FROM tweet AS t
+        LEFT JOIN follower AS f ON t.user_id = f.following_user_id
+        WHERE (t.user_id = ? OR f.follower_user_id = ?) AND t.tweet_id = ?
       `
-        const likedUsers = await db.all(likedUsersQuery, [tweetId])
+    const tweet = await db.get(checkTweetOwnershipQuery, [
+      user_id,
+      user_id,
+      tweetId,
+    ])
 
-        const likes = likedUsers.map(user => user.username)
-
-        response.json({likes})
-      }
-    } catch (error) {
-      console.log(`DB Error: ${error.message}`)
-      response.status(500).send('Internal Server Error')
+    if (!tweet) {
+      response.status(401).send('Invalid Request')
+    } else {
+      const likedUsersQuery = `
+          SELECT u.username
+          FROM user AS u
+          INNER JOIN like AS l ON u.user_id = l.user_id
+          WHERE l.tweet_id = ?
+        `
+      const likedUsers = await db.all(likedUsersQuery, [tweetId])
+      const likes = likedUsers.map(user => user.username)
+      response.json({likes})
     }
   },
 )
@@ -277,120 +244,92 @@ app.get(
   async (request, response) => {
     const currentUser = request.user.username
     const tweetId = request.params.tweetId
+    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+    const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-    try {
-      const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-      const {user_id} = await db.get(getUserIdQuery, [currentUser])
+    const checkTweetOwnershipQuery = `
+                    SELECT t.tweet_id 
+                    FROM tweet AS t
+                    LEFT JOIN follower AS f ON t.user_id = f.following_user_id
+                    WHERE (t.user_id = ? OR f.follower_user_id = ?) AND t.tweet_id = ?
+                  `
+    const tweet = await db.get(checkTweetOwnershipQuery, [
+      user_id,
+      user_id,
+      tweetId,
+    ])
 
-      const checkTweetOwnershipQuery = `
-      SELECT t.tweet_id 
-      FROM tweet AS t
-      LEFT JOIN follower AS f ON t.user_id = f.following_user_id
-      WHERE (t.user_id = ? OR f.follower_user_id = ?) AND t.tweet_id = ?
-    `
-      const tweet = await db.get(checkTweetOwnershipQuery, [
-        user_id,
-        user_id,
-        tweetId,
-      ])
+    if (!tweet) {
+      response.status(401).send('Invalid Request')
+    } else {
+      const repliesQuery = `
+                    SELECT u.name, r.reply
+                    FROM reply AS r
+                    INNER JOIN user AS u ON r.user_id = u.user_id
+                    WHERE r.tweet_id = ?
+                  `
+      const replies = await db.all(repliesQuery, [tweetId])
 
-      if (!tweet) {
-        response.status(401).send('Invalid Request')
-      } else {
-        const repliesQuery = `
-        SELECT u.name, r.reply
-        FROM reply AS r
-        INNER JOIN user AS u ON r.user_id = u.user_id
-        WHERE r.tweet_id = ?
-      `
-        const replies = await db.all(repliesQuery, [tweetId])
-
-        response.json({replies})
-      }
-    } catch (error) {
-      console.log(`DB Error: ${error.message}`)
-      response.status(500).send('Internal Server Error')
+      response.json({replies})
     }
   },
 )
 
 // API 9
-
 app.get('/user/tweets/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
-
-  try {
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
-
-    const userTweetsQuery = `
-      SELECT t.tweet, 
-             COUNT(l.like_id) AS likes, 
-             COUNT(r.reply_id) AS replies, 
-             t.date_time AS dateTime
-      FROM tweet AS t
-      LEFT JOIN like AS l ON t.tweet_id = l.tweet_id
-      LEFT JOIN reply AS r ON t.tweet_id = r.tweet_id
-      WHERE t.user_id = ?
-      GROUP BY t.tweet_id
-      ORDER BY t.date_time DESC
-    `
-    const userTweets = await db.all(userTweetsQuery, [user_id])
-
-    response.json(userTweets)
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
-  }
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const userTweetsQuery = `
+          SELECT t.tweet, 
+                COUNT(l.like_id) AS likes, 
+                COUNT(r.reply_id) AS replies, 
+                t.date_time AS dateTime
+          FROM tweet AS t
+          LEFT JOIN like AS l ON t.tweet_id = l.tweet_id
+          LEFT JOIN reply AS r ON t.tweet_id = r.tweet_id
+          WHERE t.user_id = ?
+          GROUP BY t.tweet_id
+          ORDER BY t.date_time DESC
+        `
+  const userTweets = await db.all(userTweetsQuery, [user_id])
+  response.json(userTweets)
 })
 
-//API 10
+// API 10
 app.post('/user/tweets/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
   const {tweet} = request.body
-
-  try {
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
-    const createTweetQuery = `
-      INSERT INTO tweet (tweet, user_id, date_time)
-      VALUES (?, ?, datetime('now'))
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const createTweetQuery = `
+      INSERT INTO tweet (tweet)
+      VALUES (?)
     `
-    await db.run(createTweetQuery, [tweet, user_id])
-
-    response.send('Created a Tweet')
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
-  }
+  await db.run(createTweetQuery, [tweet])
+  response.send('Created a Tweet')
 })
 
 //API 11
-// API 11
+
 app.delete('/tweets/:tweetId/', authenticatejwt, async (request, response) => {
   const currentUser = request.user.username
   const tweetId = request.params.tweetId
+  const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
+  const {user_id} = await db.get(getUserIdQuery, [currentUser])
 
-  try {
-    const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`
-    const {user_id} = await db.get(getUserIdQuery, [currentUser])
+  const checkTweetOwnershipQuery = `SELECT user_id FROM tweet WHERE tweet_id = ?`
+  const {user_id: tweetOwnerId} = await db.get(checkTweetOwnershipQuery, [
+    tweetId,
+  ])
 
-    const checkTweetOwnershipQuery = `SELECT user_id FROM tweet WHERE tweet_id = ?`
-    const {user_id: tweetOwnerId} = await db.get(checkTweetOwnershipQuery, [
-      tweetId,
-    ])
+  if (!tweetOwnerId || user_id !== tweetOwnerId) {
+    response.status(401).send('Invalid Request')
+  } else {
+    const deleteTweetQuery = `DELETE FROM tweet WHERE tweet_id = ?`
+    await db.run(deleteTweetQuery, [tweetId])
 
-    if (!tweetOwnerId || user_id !== tweetOwnerId) {
-      response.status(401).send('Invalid Request')
-    } else {
-      const deleteTweetQuery = `DELETE FROM tweet WHERE tweet_id = ?`
-      await db.run(deleteTweetQuery, [tweetId])
-
-      response.send('Tweet Removed')
-    }
-  } catch (error) {
-    console.log(`DB Error: ${error.message}`)
-    response.status(500).send('Internal Server Error')
+    response.send('Tweet Removed')
   }
 })
 
